@@ -1,0 +1,8 @@
+{
+  "transit": {
+    "useTransit": true
+  },
+  "street": {
+    "linkStopsToStreets": true
+  }
+}

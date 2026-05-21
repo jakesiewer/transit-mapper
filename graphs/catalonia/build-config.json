@@ -1,0 +1,15 @@
+{
+  "osm": [
+    {
+      "source": "catalonia.osm.pbf"
+    }
+  ],
+  "gtfs": [
+    {
+      "source": "catalonia.gtfs.zip"
+    },
+    {
+      "source": "barcelona.tmb.gtfs.zip"
+    }
+  ]
+}

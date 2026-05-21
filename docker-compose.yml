@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  otp-graph-builder-service:
+    build:
+      context: .
+      dockerfile: Dockerfile.otp1
+    container_name: otp-graph-builder-container
+    mem_limit: 16g
+    volumes:
+      - ./graphs:/var/opentripplanner/graphs
+    command: --build /var/opentripplanner/graphs/default
+
+  # Serves ALL routers found under /graphs/<region>/
+  # Query a specific region: GET /otp/routers/ireland/plan?...
+  # List available routers: GET /otp/routers
+  otp-app-service:
+    container_name: otp-app-container
+    build:
+      context: .
+      dockerfile: Dockerfile.otp1
+    command: --server --basePath /var/opentripplanner --autoScan
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./graphs:/var/opentripplanner/graphs

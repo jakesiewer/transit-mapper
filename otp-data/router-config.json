@@ -1,0 +1,7 @@
+{
+  "routingDefaults": {
+    "itineraryFilters": {
+      "debug": "limit-to-search-window"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+# Operating System Files
+.DS_Store
+
+# Build artifacts
+*.obj
+graphs/*/Graph.obj
+graphs/*/*osm.pbf
+graphs/*/*gtfs.zip
+
+# Generated GTFS unzipped directories
+graphs/*/*.gtfs/
+
+# Logs
+*.log
+
+# Temporary files
+*~

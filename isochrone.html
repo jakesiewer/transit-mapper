@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Transit Isochrone</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style> 
+    html, body, #map { height: 100%; margin: 0; }
+    #legend {
+      position: absolute; bottom: 30px; left: 10px; z-index: 1000;
+      background: white; padding: 10px 14px; border-radius: 6px;
+      box-shadow: 0 1px 5px rgba(0,0,0,.4); font: 14px/1.6 sans-serif;
+    }
+    .swatch { display: inline-block; width: 14px; height: 14px; margin-right: 6px; vertical-align: middle; opacity: 0.6; }
+    #hint { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 1000;
+      background: white; padding: 6px 12px; border-radius: 4px; box-shadow: 0 1px 5px rgba(0,0,0,.4);
+      font: 13px sans-serif; pointer-events: none; }
+    #controls {
+      position: absolute; top: 10px; right: 10px; z-index: 1000;
+      background: white; padding: 10px 14px; border-radius: 6px;
+      box-shadow: 0 1px 5px rgba(0,0,0,.4); font: 13px sans-serif;
+      display: flex; flex-direction: column; gap: 10px; min-width: 200px;
+    }
+    .control-row { display: flex; flex-direction: column; gap: 4px; }
+    .control-row label { font-weight: bold; display: flex; justify-content: space-between; }
+    .control-row input[type=range] { width: 100%; cursor: pointer; }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div id="hint">Click anywhere on the map to set the origin</div>
+<div id="controls">
+  <div class="control-row">
+    <label>Date</label>
+    <input id="date-picker" type="date" style="width:100%; font: 13px sans-serif; padding: 2px 4px; border: 1px solid #ccc; border-radius: 4px;">
+  </div>
+  <div class="control-row">
+    <label>Departure time <span id="time-display"></span></label>
+    <input id="time-slider" type="range" min="0" max="95" step="1" autocomplete="off">
+  </div>
+  <div class="control-row">
+    <label>Max travel time <span id="maxtime-display">90 min</span></label>
+    <input id="maxtime-slider" type="range" min="0" max="180" value="90" step="1" autocomplete="off">
+  </div>
+  <div class="control-row">
+    <label>Max walk distance <span id="walk-display">1.0 km</span></label>
+    <input id="walk-slider" type="range" min="0" max="2000" value="1000" step="50" autocomplete="off">
+  </div>
+</div>
+<div id="legend">
+  <b>Transit from Derry</b><br>
+  <span class="swatch" style="background:#2ecc71"></span> <span id="band1-label"></span><br>
+  <span class="swatch" style="background:#f39c12"></span> <span id="band2-label"></span><br>
+  <span class="swatch" style="background:#e05344"></span> <span id="band3-label"></span><br>
+  <span class="swatch" style="background:#8e44ad"></span> <span id="band4-label"></span>
+</div>
+<script>
+  const map = L.map('map').setView([54.954239, -7.728169], 12);
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '© OpenStreetMap contributors © CARTO'
+  }).addTo(map);
+
+  const OTP_BASE = 'http://localhost:8080/otp/routers';
+  const colors = ['#8e44ad', '#e05344', '#f39c12', '#2ecc71'];
+  const hint = document.getElementById('hint');
+  const legendTitle = document.querySelector('#legend b');
+
+  // Router registry — populated from OTP on load
+  let routers = []; // [{ id, bounds: {minLat, minLng, maxLat, maxLng} }]
+
+  function routerForPoint(lat, lng) {
+    return routers.find(r => {
+      const b = r.bounds;
+      return lat >= b.minLat && lat <= b.maxLat && lng >= b.minLng && lng <= b.maxLng;
+    });
+  }
+
+  async function loadRouters() {
+    try {
+      const res = await fetch(OTP_BASE);
+      const data = await res.json();
+      routers = (data.routerInfo || []).map(r => ({
+        id: r.routerId,
+        bounds: {
+          minLat: r.lowerLeftLatitude,
+          minLng: r.lowerLeftLongitude,
+          maxLat: r.upperRightLatitude,
+          maxLng: r.upperRightLongitude,
+        }
+      }));
+      console.log('Available routers:', routers.map(r => r.id));
+    } catch (e) {
+      console.error('Failed to load routers:', e);
+      hint.textContent = 'Could not reach OTP server';
+    }
+  }
+  const datePicker = document.getElementById('date-picker');
+  const timeSlider = document.getElementById('time-slider');
+  const timeDisplay = document.getElementById('time-display');
+  const maxtimeSlider = document.getElementById('maxtime-slider');
+  const maxtimeDisplay = document.getElementById('maxtime-display');
+  const walkSlider = document.getElementById('walk-slider');
+  const walkDisplay = document.getElementById('walk-display');
+
+  const now = new Date();
+  datePicker.value = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
+  const currentSliderStep = Math.round((now.getHours() * 60 + now.getMinutes()) / 15);
+  timeSlider.value = Math.min(currentSliderStep, 95);
+  timeDisplay.textContent = sliderToLabel(timeSlider.value);
+
+  let isoLayers = [];
+  let pin = null;
+  let lastLatLng = null;
+
+  function sliderToTime(value) {
+    const totalMinutes = value * 15;
+    const h = Math.floor(totalMinutes / 60).toString().padStart(2, '0');
+    const m = (totalMinutes % 60).toString().padStart(2, '0');
+    return `${h}:${m}:00`;
+  }
+
+  function sliderToLabel(value) {
+    const totalMinutes = value * 15;
+    const h = Math.floor(totalMinutes / 60).toString().padStart(2, '0');
+    const m = (totalMinutes % 60).toString().padStart(2, '0');
+    return `${h}:${m}`;
+  }
+
+  function formatMin(minutes) {
+    if (minutes < 60) return `${minutes} min`;
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return m === 0 ? `${h} hr` : `${h} hr ${m} min`;
+  }
+
+  function getCutoffs(maxMin) {
+    const step = maxMin / 4;
+    return [step, step * 2, step * 3, maxMin];
+  }
+
+  function updateLegendBands() {
+    const maxMin = parseInt(maxtimeSlider.value);
+    const cutoffs = getCutoffs(maxMin);
+    document.getElementById('band1-label').textContent = `0 – ${formatMin(cutoffs[0])}`;
+    document.getElementById('band2-label').textContent = `${formatMin(cutoffs[0])} – ${formatMin(cutoffs[1])}`;
+    document.getElementById('band3-label').textContent = `${formatMin(cutoffs[1])} – ${formatMin(cutoffs[2])}`;
+    document.getElementById('band4-label').textContent = `${formatMin(cutoffs[2])} – ${formatMin(cutoffs[3])}`;
+  }
+
+  datePicker.addEventListener('change', () => {
+    if (lastLatLng) fetchIsochrone(lastLatLng.lat, lastLatLng.lng);
+  });
+
+  timeSlider.addEventListener('input', () => {
+    timeDisplay.textContent = sliderToLabel(timeSlider.value);
+  });
+
+  timeSlider.addEventListener('change', () => {
+    if (lastLatLng) fetchIsochrone(lastLatLng.lat, lastLatLng.lng);
+  });
+
+  maxtimeSlider.addEventListener('input', () => {
+    maxtimeDisplay.textContent = `${maxtimeSlider.value} min`;
+    updateLegendBands();
+  });
+
+  maxtimeSlider.addEventListener('change', () => {
+    if (lastLatLng) fetchIsochrone(lastLatLng.lat, lastLatLng.lng);
+  });
+
+  walkSlider.addEventListener('input', () => {
+    const m = parseInt(walkSlider.value);
+    walkDisplay.textContent = m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`;
+  });
+
+  walkSlider.addEventListener('change', () => {
+    if (lastLatLng) fetchIsochrone(lastLatLng.lat, lastLatLng.lng);
+  });
+
+  function fetchIsochrone(lat, lng) {
+    const router = routerForPoint(lat, lng);
+    const location = router.id.charAt(0).toUpperCase() + router.id.slice(1);
+    if (!router) {
+      hint.textContent = 'No transit graph covers this location';
+      return;
+    }
+
+    hint.textContent = `Loading… (${location})`;
+    lastLatLng = { lat, lng };
+
+    isoLayers.forEach(l => map.removeLayer(l));
+    isoLayers = [];
+    if (pin) map.removeLayer(pin);
+
+    pin = L.circleMarker([lat, lng], { radius: 6, color: '#333', fillColor: '#fff', fillOpacity: 1, weight: 2 }).addTo(map);
+    legendTitle.textContent = `Transit from ${lat.toFixed(4)}, ${lng.toFixed(4)} (${location})`;
+
+    const time = sliderToTime(timeSlider.value);
+    const maxMin = parseInt(maxtimeSlider.value);
+    const cutoffs = getCutoffs(maxMin);
+    const cutoffParams = cutoffs.map(c => `cutoffSec=${Math.round(c * 60)}`).join('&');
+    const url = `${OTP_BASE}/${router.id}/isochrone?fromPlace=${lat},${lng}&mode=TRANSIT,WALK&date=${datePicker.value}&time=${time}&maxWalkDistance=${walkSlider.value}&${cutoffParams}`;
+
+    fetch(url)
+      .then(r => r.json())
+      .then(geojson => {
+        geojson.features.forEach((feature, i) => {
+          const color = colors[i] ?? colors[colors.length - 1];
+          const layer = L.geoJSON(feature, {
+            style: { color, fillColor: color, fillOpacity: 0.25, weight: 1.5 }
+          }).addTo(map);
+          isoLayers.push(layer);
+        });
+        hint.textContent = `Click anywhere to change origin (${location})`;
+      })
+      .catch(() => { hint.textContent = 'No transit found at this location'; });
+  }
+
+  map.on('click', e => fetchIsochrone(e.latlng.lat, e.latlng.lng));
+
+  updateLegendBands();
+
+  loadRouters().then(() => {
+    if (routers.length > 0) {
+      fetchIsochrone(54.954239, -7.728169);
+    }
+  });
+</script>
+</body>
+</html>

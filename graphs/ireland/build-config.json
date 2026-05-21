@@ -1,0 +1,12 @@
+{
+  "osm": [
+    {
+      "source": "ireland-and-northern-ireland.osm.pbf"
+    }
+  ],
+  "gtfs": [
+    {
+      "source": "ireland.gtfs.zip"
+    }
+  ]
+}
